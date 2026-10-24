@@ -1,0 +1,17 @@
+{
+  "name": "TeamForge",
+  "short_name": "TeamForge",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050b16",
+  "theme_color": "#0f172a",
+  "description": "TeamForge student collaboration and team matching platform",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
