@@ -1,181 +1,148 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
-import {
-  Bell, Check, Download, LogOut, Moon, Search, ShieldCheck, Sparkles, SunMedium,
-  UserCircle2, Users, Video, X, CheckCircle2, MessageSquareText, Camera,
-  Fingerprint, UserRound, BriefcaseBusiness
-} from 'lucide-react';
+import { Bell, CheckCircle2, Download, Fingerprint, LogOut, Moon, Sparkles, SunMedium, Users, X } from 'lucide-react';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:5000' : '';
 const STORAGE_KEYS = {
   students: 'teamforge_students_v1',
   currentUser: 'teamforge_current_user_v1',
   theme: 'teamforge_theme_v1',
   notifications: 'teamforge_notifications_v1',
-  biometric: 'teamforge_biometric_v1',
 };
 
 const defaultAvatar = '/logo.svg';
+const API_BASE = import.meta.env.DEV ? 'http://localhost:5000' : '';
 
-function getInitialStudents() {
-  const raw = localStorage.getItem(STORAGE_KEYS.students);
-  if (!raw) return [];
+function readJson(key, fallback) {
   try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function safeStorage(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // ignore storage errors
-  }
-}
-
-function loadStorage(key, fallback) {
-  const raw = localStorage.getItem(key);
-  if (raw === null) return fallback;
-  try {
-    return JSON.parse(raw);
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
   } catch {
     return fallback;
   }
 }
 
-function themeApplier(theme) {
-  document.body.classList.toggle('dark', theme === 'dark');
-  document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
+function writeJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
 }
 
-function scoreMatch(student, currentUser) {
-  if (!currentUser || !student || student.id === currentUser.id) return 0;
-  const sharedSkills = currentUser.skills.filter((skill) => student.skills.includes(skill)).length;
-  const performanceDelta = Math.max(0, 100 - Math.abs(currentUser.performance - student.performance));
-  const departmentBonus = currentUser.department === student.department ? 12 : 0;
-  const interestBonus = currentUser.interests.filter((item) => student.interests.includes(item)).length * 8;
-  return Math.min(100, sharedSkills * 18 + performanceDelta * 0.5 + departmentBonus + interestBonus);
+function safeName(name) {
+  return (name || 'Student').trim() || 'Student';
 }
 
 function asciiAvatar(name) {
-  return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=0f172a&color=f8fafc&size=220`;
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(safeName(name))}&background=0f172a&color=f8fafc&size=220`;
 }
 
-function buildStudent(data) {
+function buildStudent(input = {}) {
+  const name = safeName(input.name);
   return {
-    id: data.id || crypto.randomUUID(),
-    name: data.name || 'Student',
-    email: (data.email || '').toLowerCase(),
-    password: data.password || 'teamforge123',
-    department: data.department || 'CSE',
-    year: data.year || 'II Year',
-    skills: Array.isArray(data.skills) ? data.skills : [],
-    interests: Array.isArray(data.interests) ? data.interests : [],
-    performance: Number(data.performance || 0),
-    projects: Array.isArray(data.projects) ? data.projects : [],
-    bio: data.bio || 'Student developer building innovative solutions.',
-    avatar: data.avatar || asciiAvatar(data.name || 'Student'),
-    teamMembers: Array.isArray(data.teamMembers) ? data.teamMembers : [],
-    biometricEnabled: Boolean(data.biometricEnabled),
-    createdAt: data.createdAt || new Date().toISOString(),
+    id: input.id || crypto.randomUUID(),
+    name,
+    email: String(input.email || '').toLowerCase(),
+    password: input.password || 'teamforge123',
+    department: input.department || 'CSE',
+    year: input.year || 'II Year',
+    skills: Array.isArray(input.skills) ? input.skills : String(input.skills || '').split(',').map((s) => s.trim()).filter(Boolean),
+    interests: Array.isArray(input.interests) ? input.interests : String(input.interests || '').split(',').map((s) => s.trim()).filter(Boolean),
+    performance: Number(input.performance || 0),
+    projects: Array.isArray(input.projects) ? input.projects : String(input.projects || '').split(',').map((s) => s.trim()).filter(Boolean),
+    bio: input.bio || 'Building solutions and collaborating with peers.',
+    avatar: input.avatar || asciiAvatar(name),
+    requests: Array.isArray(input.requests) ? input.requests : [],
+    teamMembers: Array.isArray(input.teamMembers) ? input.teamMembers : [],
+    biometricEnabled: Boolean(input.biometricEnabled),
   };
 }
 
-function createNotification(studentId, title, message, targetPath, type = 'info') {
-  return {
-    id: crypto.randomUUID(),
-    studentId,
-    title,
-    message,
-    targetPath,
-    type,
-    read: false,
-    createdAt: new Date().toISOString(),
-  };
+function scoreMatch(student, currentUser) {
+  if (!student || !currentUser || student.id === currentUser.id) return 0;
+  const sharedSkills = student.skills.filter((skill) => currentUser.skills.includes(skill)).length;
+  const departmentBonus = student.department === currentUser.department ? 15 : 0;
+  const interestBonus = student.interests.filter((interest) => currentUser.interests.includes(interest)).length * 10;
+  const performanceGap = Math.max(0, 100 - Math.abs(student.performance - currentUser.performance));
+  return Math.min(100, sharedSkills * 18 + departmentBonus + interestBonus + performanceGap * 0.4);
 }
 
 function App() {
-  const [students, setStudents] = useState(() => getInitialStudents());
-  const [currentUser, setCurrentUser] = useState(() => loadStorage(STORAGE_KEYS.currentUser, null));
-  const [theme, setTheme] = useState(() => loadStorage(STORAGE_KEYS.theme, 'light'));
-  const [notifications, setNotifications] = useState(() => loadStorage(STORAGE_KEYS.notifications, []));
-  const [promptEvent, setPromptEvent] = useState(null);
+  const [students, setStudents] = useState(() => readJson(STORAGE_KEYS.students, []));
+  const [currentUser, setCurrentUser] = useState(() => readJson(STORAGE_KEYS.currentUser, null));
+  const [theme, setTheme] = useState(() => readJson(STORAGE_KEYS.theme, 'light'));
+  const [notifications, setNotifications] = useState(() => readJson(STORAGE_KEYS.notifications, []));
+  const [installEvent, setInstallEvent] = useState(null);
 
   useEffect(() => {
-    document.body.classList.toggle('dark', theme === 'dark');
-    localStorage.setItem(STORAGE_KEYS.theme, JSON.stringify(theme));
-  }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(students));
+    writeJson(STORAGE_KEYS.students, students);
   }, [students]);
 
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem(STORAGE_KEYS.currentUser, JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.currentUser);
-    }
+    if (currentUser) writeJson(STORAGE_KEYS.currentUser, currentUser);
+    else localStorage.removeItem(STORAGE_KEYS.currentUser);
   }, [currentUser]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.notifications, JSON.stringify(notifications));
+    const root = document.body;
+    root.classList.toggle('dark', theme === 'dark');
+    document.documentElement.style.colorScheme = theme === 'dark' ? 'dark' : 'light';
+    writeJson(STORAGE_KEYS.theme, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    writeJson(STORAGE_KEYS.notifications, notifications);
   }, [notifications]);
 
   useEffect(() => {
-    const beforeInstallPromptListener = (event) => {
+    const onBeforeInstall = (event) => {
       event.preventDefault();
-      setPromptEvent(event);
+      setInstallEvent(event);
+      window.deferredPrompt = event;
     };
 
-    window.addEventListener('beforeinstallprompt', beforeInstallPromptListener);
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
 
-    const { serviceWorker } = navigator;
-    if ('serviceWorker' in navigator && serviceWorker) {
+    if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
 
-    return () => window.removeEventListener('beforeinstallprompt', beforeInstallPromptListener);
+    return () => window.removeEventListener('beforeinstallprompt', onBeforeInstall);
   }, []);
 
   const totalRegisteredStudents = students.length;
 
+  const addNotification = (studentId, title, message, targetPath = '/', type = 'info') => {
+    const next = {
+      id: crypto.randomUUID(),
+      studentId,
+      title,
+      message,
+      targetPath,
+      type,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+    setNotifications((prev) => [next, ...prev]);
+  };
+
   const onRegister = (studentData) => {
-    const normalizedStudent = buildStudent(studentData);
-    const updatedStudents = [...students, normalizedStudent];
-    setStudents(updatedStudents);
-    setCurrentUser(normalizedStudent);
+    const student = buildStudent(studentData);
+    setStudents((prev) => [...prev, student]);
+    setCurrentUser(student);
   };
-
-  const onLogout = () => {
-    setCurrentUser(null);
-  };
-
-  const addNotification = (studentId, title, message, targetPath, type = 'info') => {
-    const next = createNotification(studentId, title, message, targetPath, type);
-    setNotifications((previous) => [next, ...previous]);
-  };
-
-  const markNotificationsRead = () => setNotifications((previous) => previous.map((item) => ({ ...item, read: true })));
 
   return (
     <BrowserRouter>
       <AppLayout
         currentUser={currentUser}
-        onLogout={onLogout}
-        theme={theme}
-        onToggleTheme={() => setTheme((previous) => (previous === 'dark' ? 'light' : 'dark'))}
-        notifications={notifications}
-        onNavigateNotifications={markNotificationsRead}
-        promptEvent={promptEvent}
-        totalRegisteredStudents={totalRegisteredStudents}
         students={students}
-        onRegister={onRegister}
-        addNotification={addNotification}
+        theme={theme}
+        onToggleTheme={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+        notifications={notifications}
+        totalRegisteredStudents={totalRegisteredStudents}
+        installEvent={installEvent}
         setCurrentUser={setCurrentUser}
+        setStudents={setStudents}
+        addNotification={addNotification}
+        onRegister={onRegister}
+        onLogout={() => setCurrentUser(null)}
       />
     </BrowserRouter>
   );
@@ -183,31 +150,28 @@ function App() {
 
 function AppLayout({
   currentUser,
-  onLogout,
+  students,
   theme,
   onToggleTheme,
   notifications,
-  onNavigateNotifications,
-  promptEvent,
   totalRegisteredStudents,
-  students,
-  onRegister,
-  addNotification,
+  installEvent,
   setCurrentUser,
+  setStudents,
+  addNotification,
+  onRegister,
+  onLogout,
 }) {
   const [showNotifications, setShowNotifications] = useState(false);
 
-  useEffect(() => {
-    themeApplier(theme);
-  }, [theme]);
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
-  const unreadCount = notifications.filter((item) => !item.read).length;
-
-  const handleInstall = async () => {
-    if (!promptEvent) return;
-    promptEvent.prompt();
-    await promptEvent.userChoice;
-    setShowNotifications(false);
+  const installApp = async () => {
+    const prompt = installEvent || window.deferredPrompt;
+    if (!prompt) return;
+    prompt.prompt();
+    await prompt.userChoice;
+    window.deferredPrompt = null;
   };
 
   return (
@@ -216,57 +180,47 @@ function AppLayout({
         <header className="navbar">
           <Link to="/dashboard" style={{ textDecoration: 'none', color: 'inherit' }}>
             <div className="logo-wrap">
-              <img src="/logo.svg" alt="TeamForge logo" className="logo-image" />
+              <img src="/logo.svg" alt="TeamForge" className="logo-image" />
               <span>TeamForge</span>
             </div>
           </Link>
 
           <div className="nav-actions">
-            <button className="install-button" onClick={handleInstall} title="Install app">
+            <button className="install-button" onClick={installApp} title="Install app" aria-label="Install app">
               <Download size={18} />
             </button>
-            <button className="theme-button" onClick={onToggleTheme} aria-label="Toggle dark mode">
+            <button className="theme-button" onClick={onToggleTheme} aria-label="Toggle theme">
               {theme === 'dark' ? <SunMedium size={18} /> : <Moon size={18} />}
             </button>
             <div style={{ position: 'relative' }}>
-              <button className="icon-button" onClick={() => setShowNotifications((previous) => !previous)} aria-label="Notifications">
+              <button className="icon-button" onClick={() => setShowNotifications((prev) => !prev)} aria-label="Notifications">
                 <Bell size={18} />
               </button>
               {unreadCount > 0 && <span className="badge">{unreadCount}</span>}
             </div>
-            <button className="button button-secondary" onClick={onLogout}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><LogOut size={16} /> Logout</span>
-            </button>
+            <button className="button button-secondary" onClick={onLogout}>Logout</button>
           </div>
         </header>
       )}
 
       {showNotifications && currentUser && (
-        <aside className="notification-panel">
-          <div className="spread" style={{ padding: '12px 16px 8px' }}>
+        <div className="notification-panel">
+          <div className="spread" style={{ padding: 12 }}>
             <h4 style={{ margin: 0 }}>Notifications</h4>
-            <button className="button button-secondary" onClick={() => setShowNotifications(false)}><X size={16} /></button>
+            <button className="button button-secondary" onClick={() => setShowNotifications(false)}><X size={14} /></button>
           </div>
           {notifications.length === 0 ? (
-            <div style={{ padding: '0 16px 18px', color: '#cbd5e1' }}>No notifications yet.</div>
+            <div style={{ padding: '0 16px 16px', color: '#cbd5e1' }}>No notifications yet.</div>
           ) : (
-            notifications.slice(0, 8).map((item) => (
-              <div
-                className="notification-item"
-                key={item.id}
-                onClick={() => {
-                  setShowNotifications(false);
-                  onNavigateNotifications();
-                  if (item.targetPath) window.location.hash = item.targetPath;
-                }}
-              >
-                <strong>{item.title}</strong>
-                <div style={{ opacity: 0.8, marginTop: 6 }}>{item.message}</div>
-                <small style={{ opacity: 0.7 }}>{new Date(item.createdAt).toLocaleString()}</small>
+            notifications.map((notification) => (
+              <div className="notification-item" key={notification.id} onClick={() => { setShowNotifications(false); if (notification.targetPath) window.location.hash = notification.targetPath; }}>
+                <strong>{notification.title}</strong>
+                <div>{notification.message}</div>
+                <small>{new Date(notification.createdAt).toLocaleString()}</small>
               </div>
             ))
           )}
-        </aside>
+        </div>
       )}
 
       <Routes>
@@ -280,11 +234,12 @@ function AppLayout({
                 currentUser={currentUser}
                 students={students}
                 notifications={notifications}
-                addNotification={addNotification}
-                setCurrentUser={setCurrentUser}
                 totalRegisteredStudents={totalRegisteredStudents}
+                setCurrentUser={setCurrentUser}
+                setStudents={setStudents}
+                addNotification={addNotification}
                 onToggleTheme={onToggleTheme}
-                promptEvent={promptEvent}
+                installEvent={installEvent}
               />
             ) : (
               <Navigate to="/login" replace />
@@ -305,7 +260,7 @@ function AppLayout({
           path="/student/:studentId"
           element={
             currentUser ? (
-              <StudentProfilePage currentUser={currentUser} students={students} setCurrentUser={setCurrentUser} setStudents={setStudents} addNotification={addNotification} />
+              <StudentProfile currentUser={currentUser} students={students} setCurrentUser={setCurrentUser} setStudents={setStudents} addNotification={addNotification} />
             ) : (
               <Navigate to="/login" replace />
             )
@@ -320,39 +275,32 @@ function GuidancePage() {
   const navigate = useNavigate();
 
   return (
-    <div className="page-container" style={{ minHeight: '100vh' }}>
+    <div className="page-container">
       <div className="hero">
         <div>
-          <div className="row" style={{ marginBottom: 24 }}>
-            <img src="/logo.svg" alt="TeamForge logo" className="logo-image" style={{ width: 70, height: 70 }} />
-            <span style={{ fontWeight: 900, fontSize: 28 }}>TeamForge</span>
+          <div className="row" style={{ marginBottom: 20 }}>
+            <img src="/logo.svg" alt="TeamForge" className="logo-image" style={{ width: 68, height: 68 }} />
+            <div style={{ fontSize: 30, fontWeight: 900 }}>TeamForge</div>
           </div>
-          <h1 className="hero-title">Find your team, build your future.</h1>
-          <p className="hero-subtitle" style={{ marginTop: 16 }}>
-            A private college collaboration space for students to connect, share projects, discover teammates, and work together.
-          </p>
-
+          <h1 className="hero-title">Build your team with confidence.</h1>
+          <p className="hero-subtitle">A private space for Sairam students to connect, collaborate, match skills, and work together on project ideas.</p>
           <ul className="feature-list">
-            <li><CheckCircle2 size={18} color="#10b981" /> Discover teammates by skills, department, interests, and performance.</li>
-            <li><CheckCircle2 size={18} color="#10b981" /> Send collaboration requests and accept joins in one place.</li>
-            <li><CheckCircle2 size={18} color="#10b981" /> Keep communication and teamwork organized with calls and notifications.</li>
+            <li><CheckCircle2 size={18} color="#10b981" /> Sign up with your college email only.</li>
+            <li><CheckCircle2 size={18} color="#10b981" /> Verify your account with a one-time email OTP.</li>
+            <li><CheckCircle2 size={18} color="#10b981" /> Discover teammates, send requests, and build projects together.</li>
           </ul>
-
-          <div className="row" style={{ marginTop: 28 }}>
+          <div className="row" style={{ marginTop: 24 }}>
             <button className="button button-primary" onClick={() => navigate('/login')}>Login</button>
           </div>
         </div>
 
-        <div className="card glass" style={{ padding: 28 }}>
-          <div className="row" style={{ marginBottom: 12 }}>
-            <ShieldCheck size={22} color="#f59e0b" />
-            <strong>How it works</strong>
-          </div>
-          <div className="grid" style={{ gap: 14 }}>
-            <div className="notice">1. Sign up with your college email ending in @sairamtap.edu.in</div>
-            <div className="notice">2. Verify your email using a real OTP sent to your mailbox.</div>
-            <div className="notice">3. Build your profile, upload your picture, and unlock AI matching.</div>
-            <div className="notice">4. Send requests, accept teammates, and start collaboration.</div>
+        <div className="card glass" style={{ padding: 24 }}>
+          <h3 style={{ marginTop: 0 }}>How it works</h3>
+          <div className="grid" style={{ gap: 12 }}>
+            <div className="notice">1. Create your profile with your college email.</div>
+            <div className="notice">2. Receive a real OTP in your inbox and verify your account.</div>
+            <div className="notice">3. Update your skills, projects, and profile picture.</div>
+            <div className="notice">4. Explore students, match with teammates, and collaborate.</div>
           </div>
         </div>
       </div>
@@ -362,112 +310,97 @@ function GuidancePage() {
 
 function LoginPage({ onRegister, setCurrentUser }) {
   const navigate = useNavigate();
-  const [mode, setMode] = useState('login');
+  const [mode, setMode] = useState('signup');
   const [form, setForm] = useState({
-    name: '', email: '', password: '', department: 'CSE', year: 'II Year', skills: '', performance: '85', projects: '', interests: '',
+    name: '', email: '', password: '', department: 'CSE', year: 'II Year', performance: '85', skills: 'React, Node', interests: 'AI, Web', projects: 'TeamForge App',
   });
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [loginError, setLoginError] = useState('');
-  const [step, setStep] = useState('idle');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleField = (event) => {
+  const updateField = (event) => {
     const { name, value } = event.target;
-    setForm((previous) => ({ ...previous, [name]: value }));
+    setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const requestOtp = async () => {
+  const sendOtp = async () => {
     if (!form.email || !form.email.endsWith('@sairamtap.edu.in')) {
-      setLoginError('Only @sairamtap.edu.in email addresses are allowed.');
+      setError('Only @sairamtap.edu.in emails are allowed.');
       return;
     }
 
-    setIsSubmitting(true);
-    setLoginError('');
-
+    setLoading(true);
+    setError('');
     try {
       const response = await fetch(`${API_BASE}/api/send-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: form.email.toLowerCase() }),
+        body: JSON.stringify({ email: form.email.trim().toLowerCase() }),
       });
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Unable to send OTP');
-      }
-
+      if (!response.ok) throw new Error(data.message || 'OTP request failed.');
       setOtpSent(true);
-      setStep('otp');
-    } catch (error) {
-      setLoginError(error.message || 'Unable to send OTP');
+    } catch (err) {
+      setError(err.message || 'Could not send OTP.');
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
   };
 
   const verifyAndCreate = async () => {
-    if (!form.email || !otp || otp.length !== 6) {
-      setLoginError('Please enter the 6-digit OTP from your email.');
+    if (!otp || otp.length !== 6) {
+      setError('Enter the 6-digit OTP sent to your email.');
       return;
     }
 
-    setIsSubmitting(true);
-    setLoginError('');
-
+    setLoading(true);
+    setError('');
     try {
       const verificationResponse = await fetch(`${API_BASE}/api/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: form.email.toLowerCase(), code: otp }),
+        body: JSON.stringify({ email: form.email.trim().toLowerCase(), code: otp }),
       });
       const verificationData = await verificationResponse.json();
+      if (!verificationResponse.ok) throw new Error(verificationData.message || 'OTP verification failed.');
 
-      if (!verificationResponse.ok) {
-        throw new Error(verificationData.message || 'OTP verification failed');
+      const students = readJson(STORAGE_KEYS.students, []);
+      if (students.some((student) => student.email === form.email.trim().toLowerCase())) {
+        throw new Error('An account with this email already exists. Please log in.');
       }
 
-      const students = getInitialStudents();
-      const exists = students.some((student) => student.email === form.email.toLowerCase());
-      if (exists) {
-        throw new Error('An account with this college email already exists. Please log in instead.');
-      }
-
-      const student = buildStudent({
+      const newStudent = buildStudent({
         id: crypto.randomUUID(),
         name: form.name,
-        email: form.email.toLowerCase(),
+        email: form.email.trim().toLowerCase(),
         password: form.password || 'teamforge123',
         department: form.department,
         year: form.year,
-        skills: form.skills.split(',').map((item) => item.trim()).filter(Boolean),
-        interests: form.interests.split(',').map((item) => item.trim()).filter(Boolean),
+        skills: form.skills.split(',').map((v) => v.trim()).filter(Boolean),
+        interests: form.interests.split(',').map((v) => v.trim()).filter(Boolean),
         performance: Number(form.performance || 0),
-        projects: form.projects.split(',').map((item) => item.trim()).filter(Boolean),
-        avatar: asciiAvatar(form.name || 'Student'),
-        bio: 'New TeamForge student ready to collaborate.',
+        projects: form.projects.split(',').map((v) => v.trim()).filter(Boolean),
+        bio: 'Fresh TeamForge student ready to collaborate.',
+        avatar: asciiAvatar(form.name),
       });
 
-      const updated = [...students, student];
-      localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(updated));
-      setCurrentUser(student);
+      onRegister(newStudent);
       navigate('/dashboard');
-    } catch (error) {
-      setLoginError(error.message || 'Unable to complete registration');
+    } catch (err) {
+      setError(err.message || 'Registration failed.');
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
   };
 
-  const handleLogin = () => {
-    const students = getInitialStudents();
-    const match = students.find((student) => student.email === form.email.toLowerCase() && student.password === form.password);
+  const loginUser = () => {
+    const students = readJson(STORAGE_KEYS.students, []);
+    const match = students.find((student) => student.email === form.email.trim().toLowerCase() && student.password === form.password);
     if (!match) {
-      setLoginError('Invalid college email or password.');
+      setError('Invalid email or password.');
       return;
     }
-
     setCurrentUser(match);
     navigate('/dashboard');
   };
@@ -475,11 +408,11 @@ function LoginPage({ onRegister, setCurrentUser }) {
   return (
     <div className="page-container">
       <div className="card glass auth-card">
-        <div className="row" style={{ justifyContent: 'center', marginBottom: 20 }}>
-          <img src="/logo.svg" alt="TeamForge logo" className="logo-image" style={{ width: 64, height: 64 }} />
+        <div className="row" style={{ justifyContent: 'center', marginBottom: 24 }}>
+          <img src="/logo.svg" alt="TeamForge" className="logo-image" style={{ width: 62, height: 62 }} />
           <div>
-            <h2 style={{ margin: 0 }}>Welcome to TeamForge</h2>
-            <p className="muted" style={{ margin: 4 }}>Private platform for Sairam students</p>
+            <h2 style={{ margin: 0 }}>TeamForge</h2>
+            <p className="muted" style={{ margin: 0 }}>Private student collaboration platform</p>
           </div>
         </div>
 
@@ -488,52 +421,50 @@ function LoginPage({ onRegister, setCurrentUser }) {
           <button className={`button ${mode === 'signup' ? 'button-primary' : 'button-secondary'}`} onClick={() => setMode('signup')}>Sign Up</button>
         </div>
 
-        {loginError && <div className="notice" style={{ marginBottom: 14 }}>{loginError}</div>}
+        {error && <div className="notice" style={{ marginBottom: 16 }}>{error}</div>}
 
         {mode === 'login' ? (
           <div className="form-grid" style={{ gridTemplateColumns: '1fr' }}>
-            <input className="input" name="email" value={form.email} onChange={handleField} placeholder="College Email" />
-            <input className="input" type="password" name="password" value={form.password} onChange={handleField} placeholder="Password" />
-            <button className="button button-primary" onClick={handleLogin}>Login</button>
+            <input className="input" name="email" value={form.email} onChange={updateField} placeholder="College Email" />
+            <input className="input" type="password" name="password" value={form.password} onChange={updateField} placeholder="Password" />
+            <button className="button button-primary" onClick={loginUser}>Login</button>
           </div>
         ) : (
           <div>
             <div className="form-grid">
-              <input className="input" name="name" value={form.name} onChange={handleField} placeholder="Full Name" />
-              <input className="input" name="email" value={form.email} onChange={handleField} placeholder="College Email (@sairamtap.edu.in)" />
-              <input className="input" type="password" name="password" value={form.password} onChange={handleField} placeholder="Password" />
-              <select className="input" name="department" value={form.department} onChange={handleField}>
+              <input className="input" name="name" value={form.name} onChange={updateField} placeholder="Full Name" />
+              <input className="input" name="email" value={form.email} onChange={updateField} placeholder="College Email (@sairamtap.edu.in)" />
+              <input className="input" type="password" name="password" value={form.password} onChange={updateField} placeholder="Password" />
+              <select className="input" name="department" value={form.department} onChange={updateField}>
                 <option value="CSE">CSE</option>
                 <option value="IT">IT</option>
                 <option value="ECE">ECE</option>
                 <option value="EEE">EEE</option>
-                <option value="MECH">Mechanical</option>
+                <option value="MECH">MECH</option>
                 <option value="AI">AI & DS</option>
               </select>
-              <select className="input" name="year" value={form.year} onChange={handleField}>
+              <select className="input" name="year" value={form.year} onChange={updateField}>
                 <option value="I Year">I Year</option>
                 <option value="II Year">II Year</option>
                 <option value="III Year">III Year</option>
                 <option value="IV Year">IV Year</option>
               </select>
-              <input className="input" name="performance" value={form.performance} onChange={handleField} placeholder="Performance Score" />
-              <input className="input" name="skills" value={form.skills} onChange={handleField} placeholder="Skills e.g. React, Node, AI" />
-              <input className="input" name="interests" value={form.interests} onChange={handleField} placeholder="Interests e.g. AI, Web, Robotics" />
-              <input className="input" name="projects" value={form.projects} onChange={handleField} placeholder="Projects e.g. Smart City, App" />
+              <input className="input" name="performance" value={form.performance} onChange={updateField} placeholder="Performance Score" />
+              <input className="input" name="skills" value={form.skills} onChange={updateField} placeholder="Skills" />
+              <input className="input" name="interests" value={form.interests} onChange={updateField} placeholder="Interests" />
+              <input className="input" name="projects" value={form.projects} onChange={updateField} placeholder="Projects" />
             </div>
 
             {!otpSent ? (
-              <button className="button button-primary" style={{ marginTop: 18, width: '100%' }} onClick={requestOtp} disabled={isSubmitting}>
-                {isSubmitting ? 'Sending OTP...' : 'Send OTP'}
+              <button className="button button-primary" style={{ width: '100%', marginTop: 18 }} onClick={sendOtp} disabled={loading}>
+                {loading ? 'Sending OTP...' : 'Send OTP'}
               </button>
             ) : (
               <div style={{ marginTop: 18 }}>
                 <input className="input" value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="Enter 6-digit OTP" />
                 <div className="row" style={{ marginTop: 14, justifyContent: 'space-between' }}>
-                  <button className="button button-secondary" onClick={requestOtp}>Resend OTP</button>
-                  <button className="button button-primary" onClick={verifyAndCreate} disabled={isSubmitting}>
-                    {isSubmitting ? 'Verifying...' : 'Verify & Register'}
-                  </button>
+                  <button className="button button-secondary" onClick={sendOtp}>Resend</button>
+                  <button className="button button-primary" onClick={verifyAndCreate} disabled={loading}>{loading ? 'Verifying...' : 'Verify & Register'}</button>
                 </div>
               </div>
             )}
@@ -544,14 +475,8 @@ function LoginPage({ onRegister, setCurrentUser }) {
   );
 }
 
-function DashboardPage({ currentUser, students, notifications, addNotification, setCurrentUser, totalRegisteredStudents, onToggleTheme, promptEvent }) {
+function DashboardPage({ currentUser, students, notifications, totalRegisteredStudents, setCurrentUser, setStudents, addNotification, onToggleTheme }) {
   const navigate = useNavigate();
-  const [showInstall, setShowInstall] = useState(Boolean(promptEvent));
-
-  useEffect(() => {
-    setShowInstall(Boolean(promptEvent));
-  }, [promptEvent]);
-
   const matches = useMemo(() => {
     return students
       .filter((student) => student.id !== currentUser.id)
@@ -560,144 +485,110 @@ function DashboardPage({ currentUser, students, notifications, addNotification, 
       .slice(0, 4);
   }, [students, currentUser]);
 
-  const currentRequests = useMemo(() => {
-    return students
-      .filter((student) => student.email === currentUser.email)
-      .flatMap((student) => (student.requests || []));
-  }, [students, currentUser.email]);
-
   const acceptRequest = (requestId) => {
-    const updatedStudents = students.map((student) => {
-      if (student.id === currentUser.id) {
-        const updatedRequests = (student.requests || []).map((request) => request.id === requestId ? { ...request, status: 'accepted' } : request);
-        return { ...student, requests: updatedRequests, teamMembers: Array.from(new Set([...(student.teamMembers || []), ...updatedRequests.filter((request) => request.status === 'accepted').map((request) => request.fromId)])) };
-      }
-      return student;
+    const updated = students.map((student) => {
+      if (student.id !== currentUser.id) return student;
+      return {
+        ...student,
+        requests: (student.requests || []).map((request) => request.id === requestId ? { ...request, status: 'accepted' } : request),
+      };
     });
-
-    setCurrentUser((previous) => ({ ...previous, teamMembers: [...new Set([...(previous.teamMembers || []), ...updatedStudents.filter((student) => student.id === currentUser.id)[0].teamMembers])] }));
-    localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(updatedStudents));
-    addNotification(currentUser.id, 'Request Accepted', 'A collaboration request was accepted successfully.', '/profile', 'success');
+    setStudents(updated);
+    setCurrentUser((prev) => ({ ...prev, requests: (prev.requests || []).map((request) => request.id === requestId ? { ...request, status: 'accepted' } : request) }));
+    addNotification(currentUser.id, 'Collaboration request accepted', 'Your connection was accepted successfully.', '/profile', 'success');
   };
 
   const rejectRequest = (requestId) => {
-    const updated = students.map((student) => (
-      student.id === currentUser.id
-        ? { ...student, requests: (student.requests || []).map((request) => request.id === requestId ? { ...request, status: 'rejected' } : request) }
-        : student
-    ));
-    localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(updated));
-    addNotification(currentUser.id, 'Request Rejected', 'A collaboration request was rejected.', '/profile', 'warning');
-  };
-
-  const installApp = async () => {
-    if (!window.deferredPrompt) return;
-    try {
-      await window.deferredPrompt.prompt();
-      await window.deferredPrompt.userChoice;
-      window.deferredPrompt = null;
-    } catch {
-      // no-op
-    }
-  };
-
-  const handleBiometric = () => {
-    const supported = !!(window.PublicKeyCredential && window.isSecureContext);
-    if (!supported) {
-      alert('Biometric sign-in is available on supported mobile browsers only.');
-      return;
-    }
-
-    const biometricEnabled = !currentUser.biometricEnabled;
-    setCurrentUser((previous) => ({ ...previous, biometricEnabled }));
-    alert(biometricEnabled ? 'Biometric login enabled.' : 'Biometric login disabled.');
+    const updated = students.map((student) => {
+      if (student.id !== currentUser.id) return student;
+      return {
+        ...student,
+        requests: (student.requests || []).map((request) => request.id === requestId ? { ...request, status: 'rejected' } : request),
+      };
+    });
+    setStudents(updated);
+    addNotification(currentUser.id, 'Collaboration request rejected', 'The request was rejected.', '/profile', 'warning');
   };
 
   return (
     <div className="page-container">
-      <div className="spread" style={{ marginBottom: 18 }}>
+      <div className="spread" style={{ marginBottom: 20 }}>
         <div>
-          <h2 className="section-title" style={{ margin: 0 }}>Dashboard</h2>
-          <p className="muted" style={{ margin: '6px 0 0' }}>Welcome back, {currentUser.name}</p>
+          <h2 style={{ margin: 0 }}>Dashboard</h2>
+          <p className="muted" style={{ margin: '8px 0 0' }}>Welcome back, {currentUser.name}</p>
         </div>
         <div className="row">
-          {showInstall && (
-            <button className="button button-secondary" onClick={installApp}><Download size={16} /> Install App</button>
-          )}
           <button className="button button-secondary" onClick={onToggleTheme}>Theme</button>
         </div>
       </div>
 
       <div className="grid grid-3" style={{ marginBottom: 24 }}>
         <div className="card">
-          <div className="row" style={{ marginBottom: 10 }}><Users size={18} color="#f59e0b" /> <strong>Total Students</strong></div>
-          <h3 style={{ fontSize: '2rem', margin: 0 }}>Total Students Registered: {totalRegisteredStudents}</h3>
+          <div className="row" style={{ marginBottom: 8 }}><Users size={18} color="#f59e0b" /> <strong>Total Students</strong></div>
+          <h3 style={{ margin: 0 }}>Total Students Registered: {totalRegisteredStudents}</h3>
         </div>
+
         <div className="card">
-          <div className="row" style={{ marginBottom: 10 }}><UserRound size={18} color="#3b82f6" /> <strong>Your Profile</strong></div>
-          <div className="row">
-            <img src={currentUser.avatar || defaultAvatar} alt={currentUser.name} className="avatar" />
-            <div>
-              <div>{currentUser.name}</div>
-              <small className="muted">{currentUser.department} • {currentUser.year}</small>
-            </div>
-          </div>
-        </div>
-        <div className="card">
-          <div className="row" style={{ marginBottom: 10 }}><Fingerprint size={18} color="#10b981" /> <strong>Biometric Login</strong></div>
-          <button className="button button-secondary" onClick={handleBiometric}>
-            {currentUser.biometricEnabled ? 'Disable Face ID / Fingerprint' : 'Enable Fingerprint / Face ID'}
+          <div className="row" style={{ marginBottom: 8 }}><Fingerprint size={18} color="#3b82f6" /> <strong>Biometric Login</strong></div>
+          <button className="button button-secondary" onClick={() => {
+            const enabled = !currentUser.biometricEnabled;
+            setCurrentUser((prev) => ({ ...prev, biometricEnabled: enabled }));
+            alert(enabled ? 'Biometric login enabled.' : 'Biometric login disabled.');
+          }}>
+            {currentUser.biometricEnabled ? 'Disable Face ID / Fingerprint' : 'Enable Face ID / Fingerprint'}
           </button>
+        </div>
+
+        <div className="card">
+          <div className="row" style={{ marginBottom: 8 }}><Sparkles size={18} color="#10b981" /> <strong>AI Matching</strong></div>
+          <div className="muted">Your skill match score updates automatically.</div>
         </div>
       </div>
 
-      <div className="grid grid-2" style={{ marginBottom: 28 }}>
+      <div className="grid grid-2" style={{ marginBottom: 24 }}>
         <div className="card">
-          <div className="spread" style={{ marginBottom: 16 }}>
+          <div className="spread">
             <h3 style={{ margin: 0 }}>AI Matching</h3>
             <Sparkles color="#f59e0b" />
           </div>
-          {matches.length === 0 ? <div className="empty-box">No additional students found yet.</div> : (
-            matches.map((student) => (
-              <div key={student.id} className="row" style={{ justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid rgba(148,163,184,0.18)' }}>
-                <div className="row">
-                  <img src={student.avatar || defaultAvatar} alt={student.name} className="avatar" />
-                  <div>
-                    <strong>{student.name}</strong>
-                    <div className="muted">{student.department} • {student.skills.slice(0, 2).join(', ') || 'General'} </div>
-                  </div>
+          {matches.length === 0 ? <div className="empty-box">No matches available yet.</div> : matches.map((student) => (
+            <div key={student.id} className="row" style={{ justifyContent: 'space-between', borderBottom: '1px solid rgba(148,163,184,0.2)', padding: '12px 0' }}>
+              <div className="row">
+                <img src={student.avatar || defaultAvatar} alt={student.name} className="avatar" />
+                <div>
+                  <strong>{student.name}</strong>
+                  <div className="muted">{student.department} • {student.skills.slice(0, 2).join(', ')}</div>
                 </div>
-                <span className="tag">{Math.round(student.score)}% match</span>
               </div>
-            ))
-          )}
+              <span className="tag">{Math.round(student.score)}% match</span>
+            </div>
+          ))}
         </div>
 
         <div className="card">
-          <div className="spread" style={{ marginBottom: 16 }}>
+          <div className="spread">
             <h3 style={{ margin: 0 }}>Requests</h3>
-            <MessageSquareText color="#3b82f6" />
+            <Bell color="#3b82f6" />
           </div>
-          {currentUser.requests?.length ? currentUser.requests.map((request) => (
-            <div key={request.id} style={{ border: '1px solid rgba(148,163,184,0.18)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
-              <div className="row" style={{ justifyContent: 'space-between' }}>
+          {currentUser.requests && currentUser.requests.length ? currentUser.requests.map((request) => (
+            <div key={request.id} style={{ border: '1px solid rgba(148,163,184,0.2)', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+              <div className="spread">
                 <strong>{request.fromName}</strong>
                 <span className="tag">{request.status}</span>
               </div>
-              <div className="row" style={{ marginTop: 14 }}>
+              <div className="row" style={{ marginTop: 12 }}>
                 <button className="button button-success" onClick={() => acceptRequest(request.id)}>Accept</button>
                 <button className="button button-danger" onClick={() => rejectRequest(request.id)}>Reject</button>
               </div>
             </div>
-          )) : <div className="empty-box">No incoming requests.</div>}
+          )) : <div className="empty-box">No incoming collaboration requests.</div>}
         </div>
       </div>
 
       <div className="spread" style={{ marginBottom: 12 }}>
         <h3 style={{ margin: 0 }}>Student Directory</h3>
         <div className="row">
-          <Link to="/profile"><button className="button button-secondary">My Profile</button></Link>
-          <button className="button button-primary" onClick={() => navigate('/profile')}>View Team</button>
+          <button className="button button-secondary" onClick={() => navigate('/profile')}>My Profile</button>
         </div>
       </div>
 
@@ -714,21 +605,11 @@ function DashboardPage({ currentUser, students, notifications, addNotification, 
               </div>
               <span className="tag">{student.performance}%</span>
             </div>
-
-            <div className="row" style={{ marginTop: 4 }}>
-              {student.skills.slice(0, 3).map((skill) => (
-                <span className="tag" key={skill}>{skill}</span>
-              ))}
+            <div className="row">
+              {student.skills.slice(0, 3).map((skill) => <span className="tag" key={skill}>{skill}</span>)}
             </div>
-
-            <div className="muted">{student.bio || 'Collaborative engineering student.'}</div>
-
-            <div className="row" style={{ justifyContent: 'space-between' }}>
-              <button className="button button-primary" onClick={() => navigate(`/student/${student.id}`)}>View Profile</button>
-              {student.id !== currentUser.id && (
-                <button className="button button-secondary" onClick={() => navigate(`/student/${student.id}`)}>Request</button>
-              )}
-            </div>
+            <div className="muted">{student.bio}</div>
+            <button className="button button-primary" onClick={() => navigate(`/student/${student.id}`)}>View Profile</button>
           </div>
         ))}
       </div>
@@ -747,133 +628,113 @@ function ProfilePage({ currentUser, students, setCurrentUser, setStudents }) {
     bio: currentUser.bio || '',
     interests: (currentUser.interests || []).join(', '),
   });
-  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(currentUser.avatar || defaultAvatar);
 
-  const handleField = (event) => {
+  const updateField = (event) => {
     const { name, value } = event.target;
-    setForm((previous) => ({ ...previous, [name]: value }));
+    setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const onChangeAvatar = (event) => {
+  const handleAvatar = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      setAvatarFile(reader.result);
-    };
+    reader.onload = () => setAvatarPreview(reader.result);
     reader.readAsDataURL(file);
   };
 
-  const saveProfile = () => {
-    const updatedUser = {
+  const save = () => {
+    const updated = {
       ...currentUser,
       name: form.name,
       department: form.department,
       year: form.year,
-      skills: form.skills.split(',').map((item) => item.trim()).filter(Boolean),
-      projects: form.projects.split(',').map((item) => item.trim()).filter(Boolean),
-      interests: form.interests.split(',').map((item) => item.trim()).filter(Boolean),
+      skills: form.skills.split(',').map((v) => v.trim()).filter(Boolean),
       performance: Number(form.performance || 0),
+      projects: form.projects.split(',').map((v) => v.trim()).filter(Boolean),
+      interests: form.interests.split(',').map((v) => v.trim()).filter(Boolean),
       bio: form.bio,
-      avatar: avatarFile || currentUser.avatar || defaultAvatar,
+      avatar: avatarPreview || defaultAvatar,
     };
-
-    const nextStudents = students.map((student) => student.id === currentUser.id ? updatedUser : student);
+    const nextStudents = students.map((student) => student.id === currentUser.id ? updated : student);
     setStudents(nextStudents);
-    setCurrentUser(updatedUser);
-    localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(nextStudents));
-    localStorage.setItem(STORAGE_KEYS.currentUser, JSON.stringify(updatedUser));
+    setCurrentUser(updated);
     alert('Profile updated successfully.');
   };
 
   return (
     <div className="page-container">
-      <div className="card glass" style={{ maxWidth: 900, margin: '18px auto 0' }}>
-        <div className="spread" style={{ marginBottom: 18 }}>
+      <div className="card glass" style={{ maxWidth: 900, margin: '18px auto 0', padding: 24 }}>
+        <div className="spread" style={{ marginBottom: 24 }}>
           <div>
             <h2 style={{ margin: 0 }}>Edit Profile</h2>
-            <p className="muted" style={{ margin: '4px 0 0' }}>Update your academic details and collaboration profile.</p>
+            <p className="muted" style={{ margin: '6px 0 0' }}>Update your details and profile picture.</p>
           </div>
-          <img src={avatarFile || currentUser.avatar || defaultAvatar} alt={currentUser.name} className="avatar-lg" />
+          <img src={avatarPreview} alt={currentUser.name} className="avatar-lg" />
         </div>
 
         <div className="form-grid">
-          <input className="input" name="name" value={form.name} onChange={handleField} placeholder="Full Name" />
-          <input className="input" name="department" value={form.department} onChange={handleField} placeholder="Department" />
-          <input className="input" name="year" value={form.year} onChange={handleField} placeholder="Year" />
-          <input className="input" name="performance" value={form.performance} onChange={handleField} placeholder="Performance Score" />
-          <input className="input" name="skills" value={form.skills} onChange={handleField} placeholder="Skills" />
-          <input className="input" name="interests" value={form.interests} onChange={handleField} placeholder="Interests" />
-          <input className="input" name="projects" value={form.projects} onChange={handleField} placeholder="Projects" />
+          <input className="input" name="name" value={form.name} onChange={updateField} placeholder="Full Name" />
+          <input className="input" name="department" value={form.department} onChange={updateField} placeholder="Department" />
+          <input className="input" name="year" value={form.year} onChange={updateField} placeholder="Year" />
+          <input className="input" name="performance" value={form.performance} onChange={updateField} placeholder="Performance Score" />
+          <input className="input" name="skills" value={form.skills} onChange={updateField} placeholder="Skills" />
+          <input className="input" name="interests" value={form.interests} onChange={updateField} placeholder="Interests" />
+          <input className="input" name="projects" value={form.projects} onChange={updateField} placeholder="Projects" />
           <div style={{ gridColumn: '1 / -1' }}>
-            <textarea className="input" rows="4" name="bio" value={form.bio} onChange={handleField} placeholder="Short biography" />
+            <textarea className="input" rows="4" name="bio" value={form.bio} onChange={updateField} placeholder="Short bio" />
           </div>
           <div style={{ gridColumn: '1 / -1' }}>
-            <input type="file" accept="image/*" onChange={onChangeAvatar} className="input" />
+            <input type="file" accept="image/*" onChange={handleAvatar} className="input" />
           </div>
         </div>
 
-        <div className="row" style={{ marginTop: 20, justifyContent: 'flex-end' }}>
-          <button className="button button-primary" onClick={saveProfile}>Save Changes</button>
+        <div className="row" style={{ justifyContent: 'flex-end', marginTop: 20 }}>
+          <button className="button button-primary" onClick={save}>Save Changes</button>
         </div>
       </div>
     </div>
   );
 }
 
-function StudentProfilePage({ currentUser, students, setCurrentUser, setStudents, addNotification }) {
+function StudentProfile({ currentUser, students, setCurrentUser, setStudents, addNotification }) {
   const { studentId } = useParams();
   const navigate = useNavigate();
   const targetStudent = students.find((student) => student.id === studentId);
-
   if (!targetStudent) return <Navigate to="/dashboard" replace />;
 
-  const alreadyRequested = (currentUser.requests || []).some((request) => request.toId === targetStudent.id || (request.fromId === currentUser.id && request.toId === targetStudent.id));
-  const acceptedRequest = ((currentUser.requests || []).some((request) => request.status === 'accepted' && request.toId === targetStudent.id) || (targetStudent.requests || []).some((request) => request.status === 'accepted' && request.fromId === currentUser.id));
+  const alreadyRequested = (currentUser.requests || []).some((request) => request.toId === targetStudent.id);
 
   const sendRequest = () => {
-    const newRequest = {
+    const request = {
       id: crypto.randomUUID(),
       fromId: currentUser.id,
       toId: targetStudent.id,
       fromName: currentUser.name,
       status: 'pending',
-      createdAt: new Date().toISOString(),
     };
 
-    const nextStudents = students.map((student) => {
+    const updatedStudents = students.map((student) => {
       if (student.id === currentUser.id) {
-        return { ...student, requests: [...(student.requests || []), newRequest] };
+        return { ...student, requests: [...(student.requests || []), request] };
       }
       if (student.id === targetStudent.id) {
-        return { ...student, requests: [...(student.requests || []), { ...newRequest, status: 'pending', toId: student.id, fromId: currentUser.id, fromName: currentUser.name }] };
+        return { ...student, requests: [...(student.requests || []), { ...request, fromName: currentUser.name }] };
       }
       return student;
     });
 
-    setStudents(nextStudents);
-    setCurrentUser((previous) => ({ ...previous, requests: [...(previous.requests || []), newRequest] }));
-    addNotification(targetStudent.id, 'New Collaboration Request', `${currentUser.name} wants to collaborate with you.`, `/student/${targetStudent.id}`, 'info');
+    setStudents(updatedStudents);
+    setCurrentUser((prev) => ({ ...prev, requests: [...(prev.requests || []), request] }));
+    addNotification(targetStudent.id, 'New collaboration request', `${currentUser.name} sent you a collaboration request.`, '/dashboard', 'info');
     navigate('/dashboard');
   };
 
-  const openCall = () => {
-    if (!acceptedRequest) return;
-    alert('Call feature enabled after both students accepted the collaboration request.');
-  };
-
-  const groupCall = () => {
-    const acceptedTeamMembers = students.filter((student) => student.id === currentUser.id || (student.teamMembers || []).includes(currentUser.id));
-    if (acceptedTeamMembers.length < 2) {
-      alert('Only accepted members of the same team can join a conference call.');
-      return;
-    }
-    alert('Conference call started for accepted team members.');
-  };
+  const callEnabled = (currentUser.teamMembers || []).includes(targetStudent.id) && (targetStudent.teamMembers || []).includes(currentUser.id);
 
   return (
     <div className="page-container">
-      <div className="card glass" style={{ maxWidth: 900, margin: '18px auto 0' }}>
+      <div className="card glass" style={{ maxWidth: 920, margin: '18px auto 0', padding: 24 }}>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 24 }}>
           <div className="row">
             <img src={targetStudent.avatar || defaultAvatar} alt={targetStudent.name} className="avatar-lg" />
@@ -889,41 +750,33 @@ function StudentProfilePage({ currentUser, students, setCurrentUser, setStudents
           )}
         </div>
 
-        <div className="grid grid-2" style={{ gap: 20 }}>
-          <div>
-            <h3>About</h3>
-            <p className="muted">{targetStudent.bio || 'Student interested in building impactful projects and collaborating across teams.'}</p>
-          </div>
-          <div>
-            <h3>Performance</h3>
-            <div className="tag">{targetStudent.performance}%</div>
-          </div>
-        </div>
-
-        <div className="grid grid-3" style={{ marginTop: 18 }}>
+        <div className="grid grid-3">
           <div className="card">
             <h4>Skills</h4>
-            <div className="row">
-              {(targetStudent.skills || []).map((skill) => <span className="tag" key={skill}>{skill}</span>)}
-            </div>
+            <div className="row">{(targetStudent.skills || []).map((skill) => <span className="tag" key={skill}>{skill}</span>)}</div>
           </div>
           <div className="card">
             <h4>Interests</h4>
-            <div className="row">
-              {(targetStudent.interests || []).map((interest) => <span className="tag" key={interest}>{interest}</span>)}
-            </div>
+            <div className="row">{(targetStudent.interests || []).map((interest) => <span className="tag" key={interest}>{interest}</span>)}</div>
           </div>
           <div className="card">
             <h4>Projects</h4>
-            <div className="row">
-              {(targetStudent.projects || []).map((project) => <span className="tag" key={project}>{project}</span>)}
-            </div>
+            <div className="row">{(targetStudent.projects || []).map((project) => <span className="tag" key={project}>{project}</span>)}</div>
           </div>
         </div>
 
-        <div className="row" style={{ marginTop: 24, justifyContent: 'flex-end' }}>
-          <button className={`button ${acceptedRequest ? 'button-primary' : 'button-secondary'}`} onClick={openCall} disabled={!acceptedRequest}>Call</button>
-          <button className="button button-secondary" onClick={groupCall}>Conference Call</button>
+        <div className="card" style={{ marginTop: 18 }}>
+          <h4>About</h4>
+          <p className="muted">{targetStudent.bio}</p>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <span className="tag">Performance: {targetStudent.performance}%</span>
+            <button className="button button-secondary" onClick={() => alert('Conference call feature is available for accepted team members.')}>
+              Conference Call
+            </button>
+            <button className="button button-primary" onClick={() => alert(callEnabled ? 'Call started.' : 'Call becomes available after both students accept the request.')} disabled={!callEnabled}>
+              Call
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -931,3 +784,4 @@ function StudentProfilePage({ currentUser, students, setCurrentUser, setStudents
 }
 
 export default App;
+
